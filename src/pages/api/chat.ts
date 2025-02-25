@@ -52,7 +52,7 @@ export default async function handler(
         role: 'model',
         parts: [
           {
-            text: "I understand! I'm JChatBot, your personal AI assistant. I'll keep my responses conversational and helpful, I am also going to respond straightforward.",
+            text: "I understand! I'm JChatBot, your personal AI assistant. I'll keep my responses conversational and helpful, I am also going to respond straightforward. I am created by Jehu Casimiro, he is a software engineer at QStrike where his interest is in AI and ML, he also likes biking and taking photographs.",
           },
         ],
       });
