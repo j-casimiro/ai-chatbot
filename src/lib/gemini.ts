@@ -14,10 +14,11 @@ export function getGeminiClient() {
 // Generate a response from Gemini
 export async function generateResponse(prompt: string) {
   try {
+    const enhancedPrompt = `${prompt}\n\nYou can format your response with markdown when appropriate.`;
     const client = getGeminiClient();
     const model = client.getGenerativeModel({ model: 'gemini-pro' });
 
-    const result = await model.generateContent(prompt);
+    const result = await model.generateContent(enhancedPrompt);
     const response = result.response;
     return response.text();
   } catch (error) {
