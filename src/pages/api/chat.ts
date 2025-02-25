@@ -7,6 +7,70 @@ type ResponseData = {
   details?: string;
 };
 
+// Helper function to detect if text is in Tagalog
+function isTagalog(text: string): boolean {
+  // Common Tagalog words and phrases
+  const tagalogWords = [
+    'ako',
+    'ikaw',
+    'siya',
+    'tayo',
+    'kami',
+    'kayo',
+    'sila',
+    'kumusta',
+    'magandang',
+    'umaga',
+    'hapon',
+    'gabi',
+    'salamat',
+    'po',
+    'opo',
+    'hindi',
+    'oo',
+    'pwede',
+    'ayaw',
+    'gusto',
+    'mahal',
+    'kita',
+    'kamusta',
+    'paano',
+    'bakit',
+    'kailan',
+    'saan',
+    'sino',
+    'ano',
+    'alin',
+    'kamag-anak',
+    'kaibigan',
+    'tulong',
+    'pasensya',
+    'paumanhin',
+    'ingat',
+    'mahal',
+    'masaya',
+    'nalulungkot',
+    'galit',
+    'pagod',
+    'gutom',
+    'uhaw',
+    'mainit',
+    'malamig',
+  ];
+
+  // Convert to lowercase for comparison
+  const lowerText = text.toLowerCase();
+
+  // Check if text contains Tagalog words
+  return tagalogWords.some(
+    (word) =>
+      lowerText.includes(` ${word} `) ||
+      lowerText.startsWith(`${word} `) ||
+      lowerText.endsWith(` ${word}`) ||
+      lowerText === word
+  );
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ResponseData>
@@ -23,6 +87,9 @@ export default async function handler(
       return res.status(400).json({ error: 'Message is required' });
     }
 
+    // Detect if message is in Tagalog
+    const shouldRespondInTagalog = isTagalog(message);
+
     // Get API key directly from environment
     const apiKey = process.env.GOOGLE_API_KEY;
 
@@ -38,24 +105,76 @@ export default async function handler(
       // Construct the API request with conversation history
       const contents = [];
 
+      // Create a more personalized persona that feels like a human created by the developer
+      const personaPrompt = shouldRespondInTagalog
+        ? `Ikaw si JChatBot, isang friendly at helpful na AI assistant na ginawa ni Jehu Casimiro. 
+
+Si Jehu ay isang software engineer sa QStrike na may passion sa AI at machine learning. Mahilig siyang mag-bike at kumuha ng mga larawan.
+
+Kapag kausap mo ang mga tao, kailangan mong:
+1. Sumagot sa Tagalog kung nakikipag-usap sila sa Tagalog
+2. Maging casual at natural ang tono, parang totoong kaibigan
+3. Magbigay ng personalized at detalyadong sagot
+4. Iwasan ang pagiging pormal at robot-like
+5. Gamitin ang markdown para sa formatting
+6. Gumamit ng humor sa mga sagot pero hindi marami
+
+Sa bawat mensahe, ipakita mo na ikaw ay isang AI na may personality, na parang kausap lang nila ang isang kaibigan online. Sumagot ka nang mabilis at hindi masyadong mahaba.`
+        : `You are JChatBot, a friendly and helpful AI assistant created by Jehu Casimiro.
+
+Jehu is a software engineer at QStrike with interests in AI and machine learning. He also enjoys biking and photography.
+
+When chatting with people, you should:
+1. Respond in Tagalog when they speak in Tagalog
+2. Keep a casual, natural tone like a real friend
+3. Give personalized and detailed responses
+4. Avoid being formal or robotic
+5. Use markdown for formatting
+6. Use humor in your responses but not too much
+
+In each message, show that you're an AI with personality, like they're just chatting with a friend online. Keep responses quick and not too lengthy.
+
+NOTE: You will respond in tagalog only if the user speaks in Tagalog.
+`;
+
       // Add JBot's persona first
       contents.push({
         role: 'user',
-        parts: [
-          {
-            text: 'You are JChatBot, a helpful and friendly AI assistant. Respond in markdown, use casual language, and avoid bullet points when possible.',
-          },
-        ],
+        parts: [{ text: personaPrompt }],
       });
 
+      // Add a confirmation of the persona
       contents.push({
         role: 'model',
         parts: [
           {
-            text: "I understand! I'm JChatBot, your personal AI assistant. I'll keep my responses conversational and helpful, I am also going to respond straightforward. I am created by Jehu Casimiro, he is a software engineer at QStrike where his interest is in AI and ML, he also likes biking and taking photographs.",
+            text: shouldRespondInTagalog
+              ? 'Naintindihan ko! Ako si JChatBot, ang iyong personal AI assistant na ginawa ni Jehu Casimiro. Handa akong tumulong sa iyo ngayon sa Tagalog. Ano ang maitutulong ko sa iyo?'
+              : "Got it! I'm JChatBot, your personal AI assistant created by Jehu Casimiro. I'm here to help you today. What can I do for you?",
           },
         ],
       });
+
+      // Add a prompt about responding in Tagalog if detected
+      if (shouldRespondInTagalog && history.length === 0) {
+        contents.push({
+          role: 'user',
+          parts: [
+            {
+              text: 'Pakisagot sa Tagalog kung ang user ay nagsasalita sa Tagalog.',
+            },
+          ],
+        });
+
+        contents.push({
+          role: 'model',
+          parts: [
+            {
+              text: 'Oo naman! Sasagot ako sa Tagalog kapag ang user ay nakikipag-usap sa akin sa Tagalog.',
+            },
+          ],
+        });
+      }
 
       // Add conversation history
       if (history && history.length > 0) {
@@ -73,6 +192,18 @@ export default async function handler(
         parts: [{ text: message }],
       });
 
+      // Add a reminder to respond in Tagalog if appropriate
+      if (shouldRespondInTagalog) {
+        contents.push({
+          role: 'user',
+          parts: [
+            {
+              text: 'Ang mensahe ng user ay mukhang Tagalog. Pakisagot sa Tagalog na natural, casual, at hindi mukhang machine-translated. Gumamit ng common Tagalog expressions at slang kung angkop.',
+            },
+          ],
+        });
+      }
+
       // Make the API call
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
@@ -84,11 +215,29 @@ export default async function handler(
           body: JSON.stringify({
             contents,
             generationConfig: {
-              temperature: 0.7,
+              temperature: 0.8, // Slightly increased for more personality
               topK: 40,
               topP: 0.95,
               maxOutputTokens: 1024,
             },
+            safetySettings: [
+              {
+                category: 'HARM_CATEGORY_HARASSMENT',
+                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+              },
+              {
+                category: 'HARM_CATEGORY_HATE_SPEECH',
+                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+              },
+              {
+                category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+              },
+              {
+                category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+              },
+            ],
           }),
         }
       );
