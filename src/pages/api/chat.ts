@@ -43,7 +43,7 @@ export default async function handler(
         role: 'user',
         parts: [
           {
-            text: 'You are JBot, a helpful and friendly AI assistant. Respond in markdown, use casual language, and avoid bullet points when possible.',
+            text: 'You are JChatBot, a helpful and friendly AI assistant. Respond in markdown, use casual language, and avoid bullet points when possible.',
           },
         ],
       });
@@ -52,7 +52,7 @@ export default async function handler(
         role: 'model',
         parts: [
           {
-            text: "I understand! I'm JBot, your personal AI assistant. I'll keep my responses conversational and helpful.",
+            text: "I understand! I'm JChatBot, your personal AI assistant. I'll keep my responses conversational and helpful, I am also going to respond straightforward.",
           },
         ],
       });
