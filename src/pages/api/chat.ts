@@ -1,6 +1,4 @@
-// File: pages/api/chat.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 type ResponseData = {
   response?: string;
@@ -36,30 +34,67 @@ export default async function handler(
     }
 
     try {
-      // Initialize the Gemini API client
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+      // Construct request exactly following the curl example
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: message,
+                  },
+                ],
+              },
+            ],
+          }),
+        }
+      );
 
-      // Generate content
-      const result = await model.generateContent(message);
-      const response = result.response;
-      const textResponse = response.text();
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          `API response error: ${response.status} ${
+            response.statusText
+          }\n${JSON.stringify(errorData, null, 2)}`
+        );
+      }
 
-      return res.status(200).json({ response: textResponse });
-    } catch (geminiError) {
-      console.error('Gemini API error:', geminiError);
+      const data = await response.json();
+
+      // Extract the text from the response
+      let responseText = '';
+      if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+        const content = data.candidates[0].content;
+        if (content.parts && content.parts.length > 0) {
+          // Define the type for part
+          type Part = { text: string };
+          responseText = content.parts.map((part: Part) => part.text).join('');
+        }
+      }
+
+      return res.status(200).json({ response: responseText });
+    } catch (error) {
+      const err = error as Error;
+      console.error('Gemini API error:', error);
 
       // Return detailed error information
       return res.status(500).json({
         error: 'Gemini API error',
-        details: String(geminiError),
+        details: err.message || String(error),
       });
     }
   } catch (error) {
+    const err = error as Error;
     console.error('Error in chat API route:', error);
     return res.status(500).json({
       error: 'Failed to generate response',
-      details: String(error),
+      details: err.message || String(error),
     });
   }
 }
