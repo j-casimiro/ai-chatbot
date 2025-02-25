@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle } from 'lucide-react';
+import Image from 'next/image';
 
 interface Message {
   text: string;
@@ -272,7 +273,7 @@ export function ChatInterface() {
   };
 
   return (
-    <div className="flex flex-col h-[600px]">
+    <div className="flex flex-col h-[600px] relative">
       <div className="flex-1 overflow-y-auto p-6 bg-white">
         {error && (
           <Alert variant="destructive" className="mb-4">
@@ -289,7 +290,12 @@ export function ChatInterface() {
             className="flex flex-col items-center justify-center h-full space-y-4 text-center"
           >
             <div className="w-24 h-24 rounded-full bg-black/5 border border-gray-200 flex items-center justify-center">
-              <span className="text-5xl font-bold text-black">J</span>
+              <Image
+                src="/jbot-avatar.svg"
+                alt="JBot"
+                width={100}
+                height={100}
+              />
             </div>
             <div>
               <h3 className="text-lg font-medium text-gray-900">
@@ -302,19 +308,6 @@ export function ChatInterface() {
           </motion.div>
         ) : (
           <div className="space-y-4">
-            {messages.length > 0 && (
-              <div className="flex justify-center mb-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={clearConversation}
-                  className="text-xs text-gray-500 flex items-center gap-1"
-                >
-                  <Trash2 className="h-3 w-3" />
-                  Clear Conversation
-                </Button>
-              </div>
-            )}
             {messages.map((message, index) => (
               <MessageItem
                 key={index}
@@ -359,6 +352,21 @@ export function ChatInterface() {
           </div>
         )}
       </div>
+
+      {/* Sticky circular clear button */}
+      {messages.length > 0 && (
+        <div className="absolute bottom-20 left-2 z-10">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={clearConversation}
+            className="h-8 w-8 rounded-full bg-white shadow-md hover:bg-red-300 transition-colors"
+            title="Clear Conversation"
+          >
+            <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-500" />
+          </Button>
+        </div>
+      )}
 
       <div className="border-t border-gray-200 p-4 bg-gray-50">
         <form onSubmit={handleSubmit} className="flex space-x-2">

@@ -31,7 +31,7 @@ export function MessageItem({
       <Avatar>
         {isUser ? (
           <AvatarFallback className="bg-gray-200 text-gray-800 border-2 border-gray-300">
-            YOU
+            U
           </AvatarFallback>
         ) : (
           <>
