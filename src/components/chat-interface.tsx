@@ -1,9 +1,8 @@
-// src/components/chat-interface.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { MessageItem } from '@/components/message-item';
-import { Send } from 'lucide-react';
+import { Send, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -12,6 +11,12 @@ import { AlertCircle } from 'lucide-react';
 interface Message {
   text: string;
   isUser: boolean;
+}
+
+// New interface for conversation history
+interface ConversationEntry {
+  role: 'user' | 'model';
+  content: string;
 }
 
 export function ChatInterface() {
@@ -26,6 +31,11 @@ export function ChatInterface() {
   const [currentMessageIndex, setCurrentMessageIndex] = useState<number | null>(
     null
   );
+
+  // For conversation history
+  const [conversationHistory, setConversationHistory] = useState<
+    ConversationEntry[]
+  >([]);
 
   // Faster typing speeds (in milliseconds)
   const [typingSpeed] = useState({
@@ -44,6 +54,45 @@ export function ChatInterface() {
 
   // Character grouping for realistic typing
   const characterGroupsRef = useRef<number>(1);
+
+  // Load conversation history from localStorage on initial load
+  useEffect(() => {
+    try {
+      const savedMessages = localStorage.getItem('jbot-messages');
+      const savedHistory = localStorage.getItem('jbot-history');
+
+      if (savedMessages) {
+        setMessages(JSON.parse(savedMessages));
+      }
+
+      if (savedHistory) {
+        setConversationHistory(JSON.parse(savedHistory));
+      }
+    } catch (err) {
+      console.error('Error loading conversation history:', err);
+      // If there's an error loading, start fresh
+      localStorage.removeItem('jbot-messages');
+      localStorage.removeItem('jbot-history');
+    }
+  }, []);
+
+  // Save conversation history to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      if (messages.length > 0) {
+        localStorage.setItem('jbot-messages', JSON.stringify(messages));
+      }
+
+      if (conversationHistory.length > 0) {
+        localStorage.setItem(
+          'jbot-history',
+          JSON.stringify(conversationHistory)
+        );
+      }
+    } catch (err) {
+      console.error('Error saving conversation history:', err);
+    }
+  }, [messages, conversationHistory]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -150,20 +199,27 @@ export function ChatInterface() {
     setInput('');
     setError(null); // Clear previous errors
 
-    // Add user message to chat
+    // Add user message to chat and history
     setMessages((prev) => [...prev, { text: userMessage, isUser: true }]);
+    setConversationHistory((prev) => [
+      ...prev,
+      { role: 'user', content: userMessage },
+    ]);
 
     // Show loading state
     setIsLoading(true);
 
     try {
-      // Call the API to get JBot's response
+      // Call the API to get JBot's response with conversation history
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message: userMessage }),
+        body: JSON.stringify({
+          message: userMessage,
+          history: conversationHistory.slice(-10), // Send last 10 messages for context
+        }),
       });
 
       const data = await response.json();
@@ -172,16 +228,17 @@ export function ChatInterface() {
         throw new Error(data.error || 'Failed to get response');
       }
 
-      // For long responses, show content immediately with typing animation
+      // Get the response text
       const responseText = data.response;
 
-      // Add AI response to chat
-      const newMessages = [
-        ...messages,
-        { text: userMessage, isUser: true },
-        { text: responseText, isUser: false },
-      ];
-      setMessages(newMessages);
+      // Add AI response to messages state
+      setMessages((prev) => [...prev, { text: responseText, isUser: false }]);
+
+      // Add AI response to conversation history
+      setConversationHistory((prev) => [
+        ...prev,
+        { role: 'model', content: responseText },
+      ]);
 
       // Start typing animation - show first chunk immediately for better UX
       setIsTyping(true);
@@ -190,7 +247,7 @@ export function ChatInterface() {
       const initialChunk =
         responseText.length > 10 ? responseText.substring(0, 10) : '';
       setDisplayedText(initialChunk);
-      setCurrentMessageIndex(newMessages.length - 1); // +1 because we just added two messages
+      setCurrentMessageIndex(messages.length + 1); // Point to the newly added response
     } catch (error) {
       const err = error as Error;
       console.error('Error:', error);
@@ -205,6 +262,13 @@ export function ChatInterface() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const clearConversation = () => {
+    setMessages([]);
+    setConversationHistory([]);
+    localStorage.removeItem('jbot-messages');
+    localStorage.removeItem('jbot-history');
   };
 
   return (
@@ -238,6 +302,19 @@ export function ChatInterface() {
           </motion.div>
         ) : (
           <div className="space-y-4">
+            {messages.length > 0 && (
+              <div className="flex justify-center mb-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={clearConversation}
+                  className="text-xs text-gray-500 flex items-center gap-1"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Clear Conversation
+                </Button>
+              </div>
+            )}
             {messages.map((message, index) => (
               <MessageItem
                 key={index}

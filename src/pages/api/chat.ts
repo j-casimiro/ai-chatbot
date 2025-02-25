@@ -1,3 +1,4 @@
+// pages/api/chat.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 type ResponseData = {
@@ -16,7 +17,7 @@ export default async function handler(
   }
 
   try {
-    const { message } = req.body;
+    const { message, history = [] } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
@@ -34,7 +35,45 @@ export default async function handler(
     }
 
     try {
-      // Construct request exactly following the curl example
+      // Construct the API request with conversation history
+      const contents = [];
+
+      // Add JBot's persona first
+      contents.push({
+        role: 'user',
+        parts: [
+          {
+            text: 'You are JBot, a helpful and friendly AI assistant. Respond in markdown, use casual language, and avoid bullet points when possible.',
+          },
+        ],
+      });
+
+      contents.push({
+        role: 'model',
+        parts: [
+          {
+            text: "I understand! I'm JBot, your personal AI assistant. I'll keep my responses conversational and helpful.",
+          },
+        ],
+      });
+
+      // Add conversation history
+      if (history && history.length > 0) {
+        for (const entry of history) {
+          contents.push({
+            role: entry.role === 'user' ? 'user' : 'model',
+            parts: [{ text: entry.content }],
+          });
+        }
+      }
+
+      // Add the current message
+      contents.push({
+        role: 'user',
+        parts: [{ text: message }],
+      });
+
+      // Make the API call
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
         {
@@ -43,15 +82,13 @@ export default async function handler(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: message,
-                  },
-                ],
-              },
-            ],
+            contents,
+            generationConfig: {
+              temperature: 0.7,
+              topK: 40,
+              topP: 0.95,
+              maxOutputTokens: 1024,
+            },
           }),
         }
       );
@@ -72,9 +109,9 @@ export default async function handler(
       if (data.candidates && data.candidates[0] && data.candidates[0].content) {
         const content = data.candidates[0].content;
         if (content.parts && content.parts.length > 0) {
-          // Define the type for part
-          type Part = { text: string };
-          responseText = content.parts.map((part: Part) => part.text).join('');
+          responseText = content.parts
+            .map((part: { text: string }) => part.text)
+            .join('');
         }
       }
 
