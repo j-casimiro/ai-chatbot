@@ -9,20 +9,97 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle } from 'lucide-react';
 import Image from 'next/image';
 
+// You can use uuid if installed, or this simpler function
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 interface Message {
-  id: string; // Add unique ID for each message
+  id: string;
   text: string;
   isUser: boolean;
+  timestamp: number;
 }
 
-// New interface for conversation history
 interface ConversationEntry {
-  id: string; // Add ID to match with messages
+  id: string;
   role: 'user' | 'model';
   content: string;
+  timestamp: number;
 }
 
+// Safe localStorage wrapper
+const storage = {
+  getItem: (key: string, defaultValue: any = null): any => {
+    if (typeof window === 'undefined') return defaultValue;
+    try {
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : defaultValue;
+    } catch (error) {
+      console.error(`Error reading ${key} from localStorage:`, error);
+      return defaultValue;
+    }
+  },
+  setItem: (key: string, value: any): boolean => {
+    if (typeof window === 'undefined') return false;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (error) {
+      console.error(`Error writing ${key} to localStorage:`, error);
+      return false;
+    }
+  },
+  removeItem: (key: string): boolean => {
+    if (typeof window === 'undefined') return false;
+    try {
+      window.localStorage.removeItem(key);
+      return true;
+    } catch (error) {
+      console.error(`Error removing ${key} from localStorage:`, error);
+      return false;
+    }
+  },
+};
+
 export function ChatInterface() {
+  // User ID state - initialized properly for SSR
+  const [userId, setUserId] = useState<string>('');
+
+  // Initialize userId safely only on client-side
+  useEffect(() => {
+    const storedUserId = storage.getItem('jbot-user-id', '');
+    if (storedUserId) {
+      setUserId(storedUserId);
+    } else {
+      const newUserId = generateUUID();
+      storage.setItem('jbot-user-id', newUserId);
+      setUserId(newUserId);
+    }
+  }, []);
+
+  // Create storage keys specific to this user - we'll set these after userId is available
+  const [storageKeys, setStorageKeys] = useState({
+    messagesKey: '',
+    historyKey: '',
+    sessionKey: '',
+  });
+
+  // Update storage keys when userId is set
+  useEffect(() => {
+    if (userId) {
+      setStorageKeys({
+        messagesKey: `jbot-messages-${userId}`,
+        historyKey: `jbot-history-${userId}`,
+        sessionKey: `jbot-session-${userId}`,
+      });
+    }
+  }, [userId]);
+
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -40,13 +117,17 @@ export function ChatInterface() {
     ConversationEntry[]
   >([]);
 
-  // Add a ref to track if localStorage should be updated
+  // Session tracking
+  const sessionIdRef = useRef<string>(`session-${Date.now()}`);
   const shouldUpdateStorage = useRef(true);
 
-  // Add session ID to prevent duplicate loading
-  const sessionIdRef = useRef<string>(`session-${Date.now()}`);
+  // Typing animation refs
+  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const characterGroupsRef = useRef<number>(1);
+  const [burstMode, setBurstMode] = useState(false);
 
-  // Faster typing speeds (in milliseconds)
+  // Typing speed configuration
   const [typingSpeed] = useState({
     min: 1,
     max: 5,
@@ -56,57 +137,68 @@ export function ChatInterface() {
     pauseMax: 30,
   });
 
-  // Track typing acceleration and bursts
-  const [burstMode, setBurstMode] = useState(false);
-  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Character grouping for realistic typing
-  const characterGroupsRef = useRef<number>(1);
-
-  // Generate a unique ID for messages
+  // Generate unique IDs for messages
   const generateId = useCallback(() => {
-    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  }, []);
+    return `${userId}-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
+  }, [userId]);
 
-  // Load conversation history from localStorage on initial load - only once
+  // Load conversation from localStorage - with user isolation
+  // We only do this once userId and storage keys are available
   useEffect(() => {
+    if (!userId || !storageKeys.messagesKey) return;
+
     try {
-      const savedSessionId = localStorage.getItem('jbot-session-id');
+      const savedSessionId = storage.getItem(storageKeys.sessionKey, '');
 
       // Only load if this is a new session or browser refresh
       if (savedSessionId !== sessionIdRef.current) {
-        const savedMessages = localStorage.getItem('jbot-messages');
-        const savedHistory = localStorage.getItem('jbot-history');
+        const savedMessages = storage.getItem(storageKeys.messagesKey, []);
+        const savedHistory = storage.getItem(storageKeys.historyKey, []);
 
-        if (savedMessages) {
-          // Add IDs to any messages that don't have them
-          const parsedMessages = JSON.parse(savedMessages);
-          const messagesWithIds = parsedMessages.map((msg: Message) => ({
-            ...msg,
-            id: msg.id || generateId(),
-          }));
-          setMessages(messagesWithIds);
+        if (savedMessages && savedMessages.length > 0) {
+          // Verify the messages belong to this user and add IDs if missing
+          const validMessages = savedMessages
+            .filter((msg: any) => {
+              // Only accept messages for this user or without a user ID (legacy)
+              const msgUserId = msg.id?.split('-')[0];
+              return !msgUserId || msgUserId === userId;
+            })
+            .map((msg: any) => ({
+              ...msg,
+              id: msg.id || generateId(),
+              timestamp: msg.timestamp || Date.now(),
+            }));
+
+          setMessages(validMessages);
         }
 
-        if (savedHistory) {
-          const parsedHistory = JSON.parse(savedHistory);
-          const historyWithIds = parsedHistory.map((entry: Message) => ({
-            ...entry,
-            id: entry.id || generateId(),
-          }));
-          setConversationHistory(historyWithIds);
+        if (savedHistory && savedHistory.length > 0) {
+          // Similar validation for history entries
+          const validHistory = savedHistory
+            .filter((entry: any) => {
+              const entryUserId = entry.id?.split('-')[0];
+              return !entryUserId || entryUserId === userId;
+            })
+            .map((entry: any) => ({
+              ...entry,
+              id: entry.id || generateId(),
+              timestamp: entry.timestamp || Date.now(),
+            }));
+
+          setConversationHistory(validHistory);
         }
 
         // Save the current session ID
-        localStorage.setItem('jbot-session-id', sessionIdRef.current);
+        storage.setItem(storageKeys.sessionKey, sessionIdRef.current);
       }
     } catch (err) {
       console.error('Error loading conversation history:', err);
-      // If there's an error loading, start fresh
-      localStorage.removeItem('jbot-messages');
-      localStorage.removeItem('jbot-history');
-      localStorage.removeItem('jbot-session-id');
+      // If there's an error loading, start fresh for this user
+      storage.removeItem(storageKeys.messagesKey);
+      storage.removeItem(storageKeys.historyKey);
+      storage.removeItem(storageKeys.sessionKey);
     }
 
     // Prevent immediate localStorage updates right after loading
@@ -114,32 +206,35 @@ export function ChatInterface() {
     setTimeout(() => {
       shouldUpdateStorage.current = true;
     }, 500);
-  }, [generateId]);
+  }, [userId, storageKeys, generateId]);
 
-  // Debounced save to localStorage
+  // Debounced save to localStorage with user isolation
   const saveToLocalStorage = useCallback(
     (messages: Message[], history: ConversationEntry[]) => {
-      if (!shouldUpdateStorage.current) return;
+      if (!shouldUpdateStorage.current || !userId || !storageKeys.messagesKey)
+        return;
 
       try {
         if (messages.length > 0) {
-          localStorage.setItem('jbot-messages', JSON.stringify(messages));
+          storage.setItem(storageKeys.messagesKey, messages);
         }
 
         if (history.length > 0) {
-          localStorage.setItem('jbot-history', JSON.stringify(history));
+          storage.setItem(storageKeys.historyKey, history);
         }
       } catch (err) {
         console.error('Error saving conversation history:', err);
       }
     },
-    []
+    [userId, storageKeys]
   );
 
-  // Save conversation history to localStorage with debounce
+  // Debounced localStorage updates
   const debouncedSaveRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    if (!userId) return; // Don't save if userId is not yet initialized
+
     if (debouncedSaveRef.current) {
       clearTimeout(debouncedSaveRef.current);
     }
@@ -153,14 +248,14 @@ export function ChatInterface() {
         clearTimeout(debouncedSaveRef.current);
       }
     };
-  }, [messages, conversationHistory, saveToLocalStorage]);
+  }, [messages, conversationHistory, saveToLocalStorage, userId]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, displayedText]);
 
-  // Improved typing animation with natural bursts and pauses
+  // Typing animation logic
   useEffect(() => {
     if (isTyping && currentMessageIndex !== null) {
       const message = messages.find(
@@ -259,37 +354,58 @@ export function ChatInterface() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !userId) return;
 
     const userMessage = input.trim();
     setInput('');
     setError(null); // Clear previous errors
 
-    const userId = generateId();
+    const messageId = generateId();
+    const timestamp = Date.now();
 
     // Add user message to chat and history
     setMessages((prev) => [
       ...prev,
-      { id: userId, text: userMessage, isUser: true },
+      {
+        id: messageId,
+        text: userMessage,
+        isUser: true,
+        timestamp,
+      },
     ]);
+
     setConversationHistory((prev) => [
       ...prev,
-      { id: userId, role: 'user', content: userMessage },
+      {
+        id: messageId,
+        role: 'user',
+        content: userMessage,
+        timestamp,
+      },
     ]);
 
     // Show loading state
     setIsLoading(true);
 
     try {
-      // Call the API to get JBot's response with conversation history
+      // Add conversation-specific information to help with context
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          // Add cache control to prevent cached responses
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0',
         },
         body: JSON.stringify({
           message: userMessage,
-          history: conversationHistory.slice(-10), // Send last 10 messages for context
+          // Include unique user ID to help prevent cross-talk
+          userId: userId,
+          // Include session ID for tracking
+          sessionId: sessionIdRef.current,
+          // Send more context to help with response relevance
+          history: conversationHistory.slice(-15), // Increased context window
         }),
       });
 
@@ -302,20 +418,31 @@ export function ChatInterface() {
       // Get the response text
       const responseText = data.response;
       const responseId = generateId();
+      const responseTimestamp = Date.now();
 
       // Add AI response to messages state
       setMessages((prev) => [
         ...prev,
-        { id: responseId, text: responseText, isUser: false },
+        {
+          id: responseId,
+          text: responseText,
+          isUser: false,
+          timestamp: responseTimestamp,
+        },
       ]);
 
       // Add AI response to conversation history
       setConversationHistory((prev) => [
         ...prev,
-        { id: responseId, role: 'model', content: responseText },
+        {
+          id: responseId,
+          role: 'model',
+          content: responseText,
+          timestamp: responseTimestamp,
+        },
       ]);
 
-      // Start typing animation - show first chunk immediately for better UX
+      // Start typing animation
       setIsTyping(true);
 
       // For longer responses, show first 10 characters immediately
@@ -333,6 +460,7 @@ export function ChatInterface() {
           id: generateId(),
           text: "Sorry, I couldn't process that request. Please check the error message below.",
           isUser: false,
+          timestamp: Date.now(),
         },
       ]);
     } finally {
@@ -343,8 +471,11 @@ export function ChatInterface() {
   const clearConversation = () => {
     setMessages([]);
     setConversationHistory([]);
-    localStorage.removeItem('jbot-messages');
-    localStorage.removeItem('jbot-history');
+    // Only clear this user's data
+    if (userId && storageKeys.messagesKey) {
+      storage.removeItem(storageKeys.messagesKey);
+      storage.removeItem(storageKeys.historyKey);
+    }
   };
 
   return (
@@ -450,13 +581,13 @@ export function ChatInterface() {
             onChange={(e) => setInput(e.target.value)}
             placeholder="Type your message..."
             className="flex-1 border-gray-300 bg-white focus-visible:ring-black text-gray-900"
-            disabled={isLoading || isTyping}
+            disabled={isLoading || isTyping || !userId}
           />
           <Button
             type="submit"
             size="icon"
             className="bg-black hover:bg-gray-800 text-white"
-            disabled={isLoading || isTyping}
+            disabled={isLoading || isTyping || !userId}
           >
             <Send className="h-4 w-4" />
           </Button>

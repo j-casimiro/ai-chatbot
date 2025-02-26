@@ -75,13 +75,22 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ResponseData>
 ) {
+  // Set strict cache control headers to prevent response caching
+  res.setHeader(
+    'Cache-Control',
+    'no-store, no-cache, must-revalidate, proxy-revalidate'
+  );
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+
   // Only accept POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { message, history = [] } = req.body;
+    const { message, history = [], userId, sessionId } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
@@ -119,6 +128,12 @@ Kapag kausap mo ang mga tao, kailangan mong:
 5. Gamitin ang markdown para sa formatting
 6. Gumamit ng humor sa mga sagot pero hindi marami
 
+MAHALAGA: Ito ay ang session ${sessionId || 'bago'} para sa user ${
+            userId || 'bago'
+          }. 
+Siguraduhin na ang iyong mga sagot ay naaangkop sa kasalukuyang tanong at hindi magbigay ng mga sagot 
+na para sa ibang user o ibang tanong. Sumagot ka lamang batay sa kasalukuyang konteksto at tanong.
+
 Sa bawat mensahe, ipakita mo na ikaw ay isang AI na may personality, na parang kausap lang nila ang isang kaibigan online. Sumagot ka nang mabilis at hindi masyadong mahaba.`
         : `You are JChatBot, a friendly and helpful AI assistant created by Jehu Casimiro.
 
@@ -133,6 +148,10 @@ When chatting with people, you should:
 6. Use humor in your responses but not too much
 7. You can be bias, you have the right for your own opinion.
 8. Do not make up answers just for the sake of anwering questions.
+
+IMPORTANT: This is session ${sessionId || 'new'} for user ${userId || 'new'}. 
+Make sure your responses are relevant to the current question and do not provide answers 
+that might be for a different user or question. Only respond based on the current context and question.
 
 In each message, show that you're an AI with personality, like they're just chatting with a friend online. Keep responses quick and not too lengthy.
 
@@ -178,13 +197,44 @@ NOTE: You will respond in tagalog only if the user speaks in Tagalog.
         });
       }
 
-      // Add conversation history
+      // Add additional instruction to avoid repeating responses from other conversations
+      contents.push({
+        role: 'user',
+        parts: [
+          {
+            text: `IMPORTANT: Always provide a fresh response based solely on the current conversation with user ${
+              userId || 'unknown'
+            }. 
+          Do not repeat answers you may have given to other users or in other sessions.
+          Always directly address the specific question or request at hand.`,
+          },
+        ],
+      });
+
+      contents.push({
+        role: 'model',
+        parts: [
+          {
+            text: `I understand. I'll provide fresh, relevant responses specific to this conversation with this user, without repeating answers from other contexts.`,
+          },
+        ],
+      });
+
+      // Add conversation history - include timestamps and validate data structure
       if (history && history.length > 0) {
         for (const entry of history) {
-          contents.push({
-            role: entry.role === 'user' ? 'user' : 'model',
-            parts: [{ text: entry.content }],
-          });
+          // Basic validation to ensure the entry has required properties
+          if (
+            entry &&
+            entry.role &&
+            (entry.role === 'user' || entry.role === 'model') &&
+            entry.content
+          ) {
+            contents.push({
+              role: entry.role,
+              parts: [{ text: entry.content }],
+            });
+          }
         }
       }
 
@@ -206,43 +256,46 @@ NOTE: You will respond in tagalog only if the user speaks in Tagalog.
         });
       }
 
-      // Make the API call
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
+      // Make the API call with added cache-busting parameter
+      const timestamp = Date.now();
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}&_=${timestamp}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0',
+        },
+        body: JSON.stringify({
+          contents,
+          generationConfig: {
+            temperature: 0.9, // Slightly increased for more personality
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 1024,
           },
-          body: JSON.stringify({
-            contents,
-            generationConfig: {
-              temperature: 0.8, // Slightly increased for more personality
-              topK: 40,
-              topP: 0.95,
-              maxOutputTokens: 1024,
+          safetySettings: [
+            {
+              category: 'HARM_CATEGORY_HARASSMENT',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE',
             },
-            safetySettings: [
-              {
-                category: 'HARM_CATEGORY_HARASSMENT',
-                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-              },
-              {
-                category: 'HARM_CATEGORY_HATE_SPEECH',
-                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-              },
-              {
-                category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-              },
-              {
-                category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                threshold: 'BLOCK_MEDIUM_AND_ABOVE',
-              },
-            ],
-          }),
-        }
-      );
+            {
+              category: 'HARM_CATEGORY_HATE_SPEECH',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+            },
+            {
+              category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+            },
+            {
+              category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+            },
+          ],
+        }),
+      });
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -265,6 +318,11 @@ NOTE: You will respond in tagalog only if the user speaks in Tagalog.
             .join('');
         }
       }
+
+      // Add log if needed for debugging
+      console.log(
+        `Response for user ${userId}, session ${sessionId} at ${new Date().toISOString()}`
+      );
 
       return res.status(200).json({ response: responseText });
     } catch (error) {
