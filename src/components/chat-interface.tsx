@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { MessageItem } from '@/components/message-item';
@@ -10,12 +10,14 @@ import { AlertCircle } from 'lucide-react';
 import Image from 'next/image';
 
 interface Message {
+  id: string; // Add unique ID for each message
   text: string;
   isUser: boolean;
 }
 
 // New interface for conversation history
 interface ConversationEntry {
+  id: string; // Add ID to match with messages
   role: 'user' | 'model';
   content: string;
 }
@@ -38,6 +40,12 @@ export function ChatInterface() {
     ConversationEntry[]
   >([]);
 
+  // Add a ref to track if localStorage should be updated
+  const shouldUpdateStorage = useRef(true);
+
+  // Add session ID to prevent duplicate loading
+  const sessionIdRef = useRef<string>(`session-${Date.now()}`);
+
   // Faster typing speeds (in milliseconds)
   const [typingSpeed] = useState({
     min: 1,
@@ -56,44 +64,96 @@ export function ChatInterface() {
   // Character grouping for realistic typing
   const characterGroupsRef = useRef<number>(1);
 
-  // Load conversation history from localStorage on initial load
+  // Generate a unique ID for messages
+  const generateId = useCallback(() => {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }, []);
+
+  // Load conversation history from localStorage on initial load - only once
   useEffect(() => {
     try {
-      const savedMessages = localStorage.getItem('jbot-messages');
-      const savedHistory = localStorage.getItem('jbot-history');
+      const savedSessionId = localStorage.getItem('jbot-session-id');
 
-      if (savedMessages) {
-        setMessages(JSON.parse(savedMessages));
-      }
+      // Only load if this is a new session or browser refresh
+      if (savedSessionId !== sessionIdRef.current) {
+        const savedMessages = localStorage.getItem('jbot-messages');
+        const savedHistory = localStorage.getItem('jbot-history');
 
-      if (savedHistory) {
-        setConversationHistory(JSON.parse(savedHistory));
+        if (savedMessages) {
+          // Add IDs to any messages that don't have them
+          const parsedMessages = JSON.parse(savedMessages);
+          const messagesWithIds = parsedMessages.map((msg: Message) => ({
+            ...msg,
+            id: msg.id || generateId(),
+          }));
+          setMessages(messagesWithIds);
+        }
+
+        if (savedHistory) {
+          const parsedHistory = JSON.parse(savedHistory);
+          const historyWithIds = parsedHistory.map((entry: Message) => ({
+            ...entry,
+            id: entry.id || generateId(),
+          }));
+          setConversationHistory(historyWithIds);
+        }
+
+        // Save the current session ID
+        localStorage.setItem('jbot-session-id', sessionIdRef.current);
       }
     } catch (err) {
       console.error('Error loading conversation history:', err);
       // If there's an error loading, start fresh
       localStorage.removeItem('jbot-messages');
       localStorage.removeItem('jbot-history');
+      localStorage.removeItem('jbot-session-id');
     }
-  }, []);
 
-  // Save conversation history to localStorage whenever it changes
+    // Prevent immediate localStorage updates right after loading
+    shouldUpdateStorage.current = false;
+    setTimeout(() => {
+      shouldUpdateStorage.current = true;
+    }, 500);
+  }, [generateId]);
+
+  // Debounced save to localStorage
+  const saveToLocalStorage = useCallback(
+    (messages: Message[], history: ConversationEntry[]) => {
+      if (!shouldUpdateStorage.current) return;
+
+      try {
+        if (messages.length > 0) {
+          localStorage.setItem('jbot-messages', JSON.stringify(messages));
+        }
+
+        if (history.length > 0) {
+          localStorage.setItem('jbot-history', JSON.stringify(history));
+        }
+      } catch (err) {
+        console.error('Error saving conversation history:', err);
+      }
+    },
+    []
+  );
+
+  // Save conversation history to localStorage with debounce
+  const debouncedSaveRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
-    try {
-      if (messages.length > 0) {
-        localStorage.setItem('jbot-messages', JSON.stringify(messages));
-      }
-
-      if (conversationHistory.length > 0) {
-        localStorage.setItem(
-          'jbot-history',
-          JSON.stringify(conversationHistory)
-        );
-      }
-    } catch (err) {
-      console.error('Error saving conversation history:', err);
+    if (debouncedSaveRef.current) {
+      clearTimeout(debouncedSaveRef.current);
     }
-  }, [messages, conversationHistory]);
+
+    debouncedSaveRef.current = setTimeout(() => {
+      saveToLocalStorage(messages, conversationHistory);
+    }, 300);
+
+    return () => {
+      if (debouncedSaveRef.current) {
+        clearTimeout(debouncedSaveRef.current);
+      }
+    };
+  }, [messages, conversationHistory, saveToLocalStorage]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -103,7 +163,12 @@ export function ChatInterface() {
   // Improved typing animation with natural bursts and pauses
   useEffect(() => {
     if (isTyping && currentMessageIndex !== null) {
-      const fullText = messages[currentMessageIndex].text;
+      const message = messages.find(
+        (_, index) => index === currentMessageIndex
+      );
+      if (!message) return;
+
+      const fullText = message.text;
 
       if (displayedText.length < fullText.length) {
         // Clear any existing timeout
@@ -200,11 +265,16 @@ export function ChatInterface() {
     setInput('');
     setError(null); // Clear previous errors
 
+    const userId = generateId();
+
     // Add user message to chat and history
-    setMessages((prev) => [...prev, { text: userMessage, isUser: true }]);
+    setMessages((prev) => [
+      ...prev,
+      { id: userId, text: userMessage, isUser: true },
+    ]);
     setConversationHistory((prev) => [
       ...prev,
-      { role: 'user', content: userMessage },
+      { id: userId, role: 'user', content: userMessage },
     ]);
 
     // Show loading state
@@ -231,14 +301,18 @@ export function ChatInterface() {
 
       // Get the response text
       const responseText = data.response;
+      const responseId = generateId();
 
       // Add AI response to messages state
-      setMessages((prev) => [...prev, { text: responseText, isUser: false }]);
+      setMessages((prev) => [
+        ...prev,
+        { id: responseId, text: responseText, isUser: false },
+      ]);
 
       // Add AI response to conversation history
       setConversationHistory((prev) => [
         ...prev,
-        { role: 'model', content: responseText },
+        { id: responseId, role: 'model', content: responseText },
       ]);
 
       // Start typing animation - show first chunk immediately for better UX
@@ -256,6 +330,7 @@ export function ChatInterface() {
       setMessages((prev) => [
         ...prev,
         {
+          id: generateId(),
           text: "Sorry, I couldn't process that request. Please check the error message below.",
           isUser: false,
         },
@@ -310,7 +385,7 @@ export function ChatInterface() {
           <div className="space-y-4">
             {messages.map((message, index) => (
               <MessageItem
-                key={index}
+                key={message.id}
                 message={message.text}
                 isUser={message.isUser}
                 isTyping={isTyping && index === currentMessageIndex}
